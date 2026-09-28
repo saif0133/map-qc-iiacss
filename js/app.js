@@ -441,7 +441,7 @@ const MUTED_CLASS = 'parking-stats__value--muted';
 // succeed. Foursquare is different: it is categorically "not configured yet"
 // rather than a live source having a transient hiccup, so it gets its own
 // small, separate status line instead of appearing as a headline metric.
-const SOURCES_NOTE_TEXT = 'Sources:\nOpenStreetMap (Overpass API)\nGoogle Maps extracted parking dataset';
+const SOURCES_NOTE_TEXT = 'Sources:\nOpenStreetMap (queried via Geofabrik Postpass)\nGoogle Maps extracted parking dataset';
 parkingSourcesNote.textContent = SOURCES_NOTE_TEXT;
 
 /**
@@ -742,8 +742,8 @@ layerParkingToggle.addEventListener('change', () => {
 });
 
 // The pin never moves once set (see the map click handler above), so a
-// failed lookup — e.g. every Overpass mirror briefly unavailable at once —
-// needs its own way to try again without waiting for a radius change.
+// failed lookup — e.g. the Postpass proxy briefly unavailable — needs its
+// own way to try again without waiting for a radius change.
 parkingRetryButton.addEventListener('click', () => {
   if (state.point) recalculateParking();
 });

@@ -5,32 +5,33 @@
 // buttons itself, so there is exactly one place (app.js) that decides what
 // the "current pin" and "current radius" are.
 //
-// Data source: the public Overpass API (a free, non-commercial OpenStreetMap
-// query service — not a paid API, not a backend we run). Element selection
-// uses Overpass's own `around:radius,lat,lon` filter, which is a true
-// great-circle ("as the crow flies") distance test done server-side — the
-// same straight-line notion of "radius" the population feature uses, never a
-// drive-time or travel-time estimate.
+// Data source: OpenStreetMap parking features, queried through Geofabrik's
+// Postpass API (PostgreSQL/PostGIS over an OSM snapshot) — OpenStreetMap is
+// still the actual data source; Postpass is only the query service. A true
+// metre-based great-circle ("as the crow flies") radius test is done
+// server-side, the same straight-line notion of "radius" the population
+// feature uses, never a drive-time or travel-time estimate.
 //
-// The actual Overpass call happens in netlify/functions/overpass.js, not
-// here. Browsers calling overpass-api.de directly get 406-rejected on some
-// deployed origins (Overpass's edge, not this app), so this file only ever
-// talks to this site's own same-origin Netlify function, which forwards the
-// query to Overpass server-side and tries its own mirror fallbacks.
+// The actual Postpass call happens in netlify/functions/overpass.js, not
+// here — this file only ever POSTs { lat, lng, radiusMeters } to this site's
+// own same-origin Netlify function and gets back the same Overpass-shaped
+// `elements` array it always expected (the function adapts Postpass's
+// GeoJSON internally), so classification/dedup/capacity logic below needed
+// no changes. Browsers never call any OSM query service directly — the
+// Netlify function is the only thing that does, avoiding the CORS/406
+// rejections direct browser calls to the classic Overpass API kept hitting.
 
 window.ParkingFeature = (function () {
   'use strict';
 
   // Same-origin Netlify function — see netlify/functions/overpass.js for the
-  // actual Overpass call and its own server-side mirror fallback chain.
+  // actual Postpass call and the Postpass -> Overpass-shape adapter.
   const OVERPASS_PROXY_ENDPOINT = '/.netlify/functions/overpass';
 
-  // The proxy's own fallback chain can legitimately run up to ~54s (three
-  // mirrors at ~18s each) before Netlify's hard 60s function ceiling would
-  // cut it off anyway, so this client-side timeout sits just above that —
-  // long enough to never cut off a proxy response that's still genuinely in
-  // progress.
-  const OVERPASS_OVERALL_TIMEOUT_MS = 65_000;
+  // The function's own Postpass request timeout is 20s; this client-side
+  // timeout sits comfortably above that so it never cuts off a proxy
+  // response that's still genuinely in progress.
+  const OVERPASS_OVERALL_TIMEOUT_MS = 30_000;
 
   // Configurable default used only for tier-3 (polygon-area) estimation —
   // see the capacity hierarchy in computeSupply() below.
@@ -182,26 +183,13 @@ window.ParkingFeature = (function () {
   }
 
   /* ------------------------------------------------------------------ *
-   * Overpass query — every OSM parking-related feature type, node/way/
-   * relation, unioned in one request so results de-duplicate at the source
-   * for anything Overpass itself would otherwise return twice.
+   * The parking-related tag filter (amenity=parking/parking_space/
+   * parking_entrance, building=parking) and the actual query text are now
+   * built server-side in netlify/functions/overpass.js from the plain
+   * { lat, lng, radiusMeters } sent below — the frontend never constructs or
+   * sends a raw query string, Overpass QL or SQL, to keep this endpoint from
+   * ever becoming an open query proxy.
    * ------------------------------------------------------------------ */
-
-  const PARKING_QUERY_TAGS = [
-    ['amenity', 'parking'],
-    ['amenity', 'parking_space'],
-    ['amenity', 'parking_entrance'],
-    ['building', 'parking'],
-  ];
-
-  function buildQuery(lat, lon, radiusMeters) {
-    // `nwr[...]` is Overpass's own shorthand for "node, way AND relation with
-    // this tag" — functionally identical to writing all three out by hand.
-    const clauses = PARKING_QUERY_TAGS.map(
-      ([key, value]) => `  nwr["${key}"="${value}"](around:${radiusMeters},${lat},${lon});`
-    ).join('\n');
-    return `[out:json][timeout:25];\n(\n${clauses}\n);\nout geom center;`;
-  }
 
   function abortError() {
     const err = new Error('Aborted');
@@ -210,22 +198,21 @@ window.ParkingFeature = (function () {
   }
 
   /**
-   * Posts the query to this site's own Netlify function (never straight to
-   * Overpass — see the comment at the top of this file). `signal` aborting
-   * (a newer pin/radius superseding this call, or the overall timeout above)
-   * cancels the in-flight request immediately.
+   * Posts { lat, lng, radiusMeters } to this site's own Netlify function
+   * (never straight to any OSM query service — see the comment at the top of
+   * this file). `signal` aborting (a newer pin/radius superseding this call,
+   * or the overall timeout above) cancels the in-flight request immediately.
    */
   async function queryOverpass(lat, lon, radiusMeters, signal) {
-    const query = buildQuery(lat, lon, radiusMeters);
     if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-      console.debug('Parking Overpass query (via Netlify proxy):', query);
+      console.debug('Parking query (via Netlify Postpass proxy):', { lat, lon, radiusMeters });
     }
     if (signal.aborted) throw abortError();
 
     const response = await fetch(OVERPASS_PROXY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ lat, lng: lon, radiusMeters }),
       signal,
     });
 
