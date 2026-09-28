@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Population and parking supply within a radius of a fixed location, computed client-side from a WorldPop-style population raster and OpenStreetMap parking data."
+    />
+    <title>Population Estimator — Iraq</title>
+    <link rel="icon" type="image/svg+xml" href="images/favicon.svg" />
+    <link rel="stylesheet" href="css/maplibre-gl.css" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="org-bar">
+        <img
+          class="org-bar__logo"
+          src="images/iiacss-logo.jpeg"
+          alt="IIACSS Research Group"
+          width="1222"
+          height="290"
+        />
+        <span class="org-bar__copyright">© 2026 IIACSS Research Group. All rights reserved.</span>
+      </div>
+
+      <header class="app__header">
+        <div class="app__brand">
+          <h1 class="app__title">Population Estimator</h1>
+          <p class="app__subtitle">
+            Population and parking supply for the selected location. For analysis of other locations, contact
+            <a href="mailto:info@iiacss.org">info@iiacss.org</a>.
+          </p>
+        </div>
+      </header>
+
+      <div id="raster-alert" class="app__alerts" hidden>
+        <div class="alert alert--warning" role="alert">
+          <div class="alert__body">
+            <p class="alert__title">Population raster unavailable</p>
+            <p class="alert__message" id="raster-alert-message"></p>
+          </div>
+        </div>
+      </div>
+
+      <main class="app__main">
+        <div class="app__map">
+          <div class="layer-toggle">
+            <label>
+              <input type="checkbox" id="layer-parking-toggle" />
+              Parking layer
+            </label>
+          </div>
+          <div id="map" class="map-canvas" role="application" aria-label="Population estimator map"></div>
+          <p class="app__map-hint" id="map-hint">Showing results for the selected location. Click elsewhere on the map for contact details.</p>
+        </div>
+
+        <aside class="app__panel">
+          <section class="panel" aria-live="polite">
+            <h2 class="panel__title">Estimate population within a circle</h2>
+
+            <div class="radius-selector" role="radiogroup" aria-label="Radius">
+              <button type="button" class="radius-selector__option" data-radius="500" role="radio" aria-checked="false">500 m</button>
+              <button type="button" class="radius-selector__option radius-selector__option--active" data-radius="1000" role="radio" aria-checked="true">1 km</button>
+              <button type="button" class="radius-selector__option" data-radius="2000" role="radio" aria-checked="false">2 km</button>
+              <button type="button" class="radius-selector__option" data-radius="3000" role="radio" aria-checked="false">3 km</button>
+              <button type="button" class="radius-selector__option" data-radius="5000" role="radio" aria-checked="false">5 km</button>
+              <button type="button" class="radius-selector__option" data-radius="10000" role="radio" aria-checked="false">10 km</button>
+            </div>
+
+            <div id="panel-empty" class="panel__empty">
+              <p class="panel__empty-title">No location selected yet</p>
+              <p class="panel__empty-hint">Click the map to drop a pin and estimate the population within the chosen radius.</p>
+            </div>
+
+            <div id="panel-result" hidden>
+              <p class="point-card__coords" dir="ltr"><code id="panel-coords"></code></p>
+
+              <div id="panel-loading" class="loading" role="status" hidden>
+                <span class="loading__spinner" aria-hidden="true"></span>
+                <span class="loading__label">Calculating population...</span>
+              </div>
+
+              <div id="panel-error" class="alert alert--error" role="alert" hidden>
+                <div class="alert__body">
+                  <p class="alert__title">The request could not be completed</p>
+                  <p class="alert__message" id="panel-error-message"></p>
+                </div>
+              </div>
+
+              <div id="panel-readout" class="population-readout" hidden>
+                <span class="population-readout__label">Population</span>
+                <strong class="population-readout__value" id="panel-population" dir="ltr">—</strong>
+                <span class="population-readout__note">Estimated from gridded population-density data (~100 m per cell), computed entirely in your browser.</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-live="polite" id="parking-panel">
+            <h2 class="panel__title">Parking Supply</h2>
+
+            <div id="parking-panel-empty" class="panel__empty">
+              <p class="panel__empty-title">No location selected yet</p>
+              <p class="panel__empty-hint">Click the map to drop a pin and estimate parking supply within the chosen radius.</p>
+            </div>
+
+            <div id="parking-panel-result" hidden>
+              <div id="parking-panel-loading" class="loading" role="status" hidden>
+                <span class="loading__spinner" aria-hidden="true"></span>
+                <span class="loading__label">Querying OpenStreetMap for parking...</span>
+              </div>
+
+              <div id="parking-panel-error" class="alert alert--error" role="alert" hidden>
+                <div class="alert__body">
+                  <p class="alert__title">The request could not be completed</p>
+                  <p class="alert__message" id="parking-panel-error-message"></p>
+                </div>
+                <button type="button" class="button button--small" id="parking-retry-button">Retry</button>
+              </div>
+
+              <dl id="parking-stats" class="parking-stats" hidden>
+                <div class="parking-stats__row">
+                  <dt>OSM Parking Facilities</dt>
+                  <dd id="parking-stat-facilities">—</dd>
+                </div>
+                <div class="parking-stats__row">
+                  <dt>Google Maps Parking Places</dt>
+                  <dd id="parking-stat-google">—</dd>
+                </div>
+                <div class="parking-stats__row">
+                  <dt>
+                    Combined Unique Parking Locations
+                    <button
+                      type="button"
+                      class="info-tip"
+                      aria-label="What does combined unique parking locations mean?"
+                      title="Deduplicated parking locations found across OpenStreetMap and the Google Maps extracted dataset."
+                    >ⓘ</button>
+                  </dt>
+                  <dd id="parking-stat-combined">—</dd>
+                </div>
+
+                <div class="parking-stats__separator" role="separator"></div>
+
+                <div class="parking-stats__row">
+                  <dt>
+                    OSM Individual Parking Spaces
+                    <button
+                      type="button"
+                      class="info-tip"
+                      aria-label="What are OSM individual parking spaces?"
+                      title="Individual parking spaces explicitly mapped in OpenStreetMap. This does not represent the total parking capacity of the area."
+                    >ⓘ</button>
+                  </dt>
+                  <dd id="parking-stat-spaces">—</dd>
+                </div>
+                <div class="parking-stats__row">
+                  <dt>Known Parking Spaces</dt>
+                  <dd id="parking-stat-known">—</dd>
+                </div>
+                <div class="parking-stats__row">
+                  <dt>Estimated Parking Spaces</dt>
+                  <dd id="parking-stat-estimated">—</dd>
+                </div>
+                <div class="parking-stats__row parking-stats__row--total">
+                  <dt>Estimated Parking Supply</dt>
+                  <dd id="parking-stat-supply">—</dd>
+                </div>
+              </dl>
+
+              <p id="parking-sources-note" class="parking-sources-note"></p>
+              <p id="parking-foursquare-status" class="parking-foursquare-status" hidden></p>
+            </div>
+          </section>
+
+          <p class="app__source">
+            Data: WorldPop-style population-count raster (EPSG:4326, ~100 m cells), OpenStreetMap parking features (via Overpass API), and a Google Maps extracted parking dataset (Baghdad, static snapshot) ·
+            Basemap © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors
+          </p>
+        </aside>
+      </main>
+    </div>
+
+    <!-- Classic (non-module) scripts on purpose: everything here runs from a
+         plain file listing with no build step, and a classic script also
+         loads correctly when this page is opened straight from disk
+         (`file://`), unlike an ES module import from a CDN. -->
+    <script src="js/maplibre-gl.js"></script>
+    <script src="js/geotiff.js"></script>
+    <script src="js/parking.js"></script>
+    <script src="js/foursquare.js"></script>
+    <script src="js/googleMapsParking.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
