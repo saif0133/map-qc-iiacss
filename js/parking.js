@@ -11,27 +11,26 @@
 // great-circle ("as the crow flies") distance test done server-side — the
 // same straight-line notion of "radius" the population feature uses, never a
 // drive-time or travel-time estimate.
+//
+// The actual Overpass call happens in netlify/functions/overpass.js, not
+// here. Browsers calling overpass-api.de directly get 406-rejected on some
+// deployed origins (Overpass's edge, not this app), so this file only ever
+// talks to this site's own same-origin Netlify function, which forwards the
+// query to Overpass server-side and tries its own mirror fallbacks.
 
 window.ParkingFeature = (function () {
   'use strict';
 
-  // The free public Overpass instance occasionally answers with 502/503/504
-  // or just stalls under load. The first three hostnames below are all part
-  // of the SAME main.overpass-api.de cluster and share one rate-limit pool —
-  // they help with a single overloaded node, but not with the whole pool
-  // being rate-limited (when that happens all three fail together, which is
-  // exactly what a shared-pool 429/504 without CORS headers looks like in
-  // the browser). Kumi Systems runs a genuinely separate, independently
-  // operated Overpass instance with its own quota, so it's kept last as a
-  // real fallback rather than another face of the same server.
-  const OVERPASS_ENDPOINTS = [
-    'https://overpass-api.de/api/interpreter',
-    'https://lz4.overpass-api.de/api/interpreter',
-    'https://z.overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-  ];
-  const OVERPASS_ATTEMPT_TIMEOUT_MS = 15_000;
-  const OVERPASS_OVERALL_TIMEOUT_MS = 50_000;
+  // Same-origin Netlify function — see netlify/functions/overpass.js for the
+  // actual Overpass call and its own server-side mirror fallback chain.
+  const OVERPASS_PROXY_ENDPOINT = '/.netlify/functions/overpass';
+
+  // The proxy's own fallback chain can legitimately run up to ~54s (three
+  // mirrors at ~18s each) before Netlify's hard 60s function ceiling would
+  // cut it off anyway, so this client-side timeout sits just above that —
+  // long enough to never cut off a proxy response that's still genuinely in
+  // progress.
+  const OVERPASS_OVERALL_TIMEOUT_MS = 65_000;
 
   // Configurable default used only for tier-3 (polygon-area) estimation —
   // see the capacity hierarchy in computeSupply() below.
@@ -211,61 +210,43 @@ window.ParkingFeature = (function () {
   }
 
   /**
-   * One attempt against one Overpass mirror, bounded by its own short
-   * timeout so a single stalled server can't eat the whole budget — and
-   * still cancelled immediately if `outerSignal` aborts (pin/radius changed).
-   */
-  async function queryOverpassOnce(endpoint, query, outerSignal) {
-    if (outerSignal.aborted) throw abortError();
-
-    const attemptController = new AbortController();
-    const onOuterAbort = () => attemptController.abort();
-    outerSignal.addEventListener('abort', onOuterAbort);
-    const timeoutId = setTimeout(() => attemptController.abort(), OVERPASS_ATTEMPT_TIMEOUT_MS);
-
-    try {
-      const body = 'data=' + encodeURIComponent(query);
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-        signal: attemptController.signal,
-      });
-      if (!response.ok) {
-        const err = new Error(`Overpass API returned HTTP ${response.status}`);
-        err.status = response.status;
-        throw err;
-      }
-      const json = await response.json();
-      return Array.isArray(json.elements) ? json.elements : [];
-    } finally {
-      clearTimeout(timeoutId);
-      outerSignal.removeEventListener('abort', onOuterAbort);
-    }
-  }
-
-  /**
-   * Tries each Overpass mirror in turn. A per-attempt timeout, a 5xx/429, or
-   * a network error moves on to the next mirror; the outer `signal` aborting
-   * (a newer pin/radius superseding this call) stops the whole thing at once.
+   * Posts the query to this site's own Netlify function (never straight to
+   * Overpass — see the comment at the top of this file). `signal` aborting
+   * (a newer pin/radius superseding this call, or the overall timeout above)
+   * cancels the in-flight request immediately.
    */
   async function queryOverpass(lat, lon, radiusMeters, signal) {
     const query = buildQuery(lat, lon, radiusMeters);
     if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-      console.debug('Parking Overpass query:', query);
+      console.debug('Parking Overpass query (via Netlify proxy):', query);
     }
-    let lastError = abortError();
+    if (signal.aborted) throw abortError();
 
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      if (signal.aborted) throw abortError();
-      try {
-        return await queryOverpassOnce(endpoint, query, signal);
-      } catch (err) {
-        if (signal.aborted) throw err; // real supersede — stop, don't try another mirror
-        lastError = err;
-      }
+    const response = await fetch(OVERPASS_PROXY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+      signal,
+    });
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Non-JSON body (e.g. a platform error page) — handled by the checks below.
     }
-    throw lastError;
+
+    if (!response.ok) {
+      const message =
+        payload && typeof payload.error === 'string'
+          ? payload.error
+          : `Overpass proxy returned HTTP ${response.status}`;
+      const err = new Error(message);
+      err.status = response.status;
+      throw err;
+    }
+
+    return Array.isArray(payload && payload.elements) ? payload.elements : [];
   }
 
   /* ------------------------------------------------------------------ *
@@ -670,9 +651,9 @@ window.ParkingFeature = (function () {
         if (myToken !== latestToken) return;
         const message =
           err instanceof Error && err.name === 'AbortError'
-            ? 'The parking data request timed out after trying multiple servers. Try again in a moment.'
+            ? 'The parking data request timed out. Try again in a moment.'
             : err instanceof TypeError
-              ? 'Could not reach the OpenStreetMap Overpass API on any mirror right now. This usually means the public service is heavily loaded or temporarily rate-limiting requests (browsers report this as a blocked cross-origin request even though the real cause is on the server side). Try again in a minute.'
+              ? 'Could not reach the parking data service right now. Try again in a moment.'
               : err instanceof Error
                 ? err.message
                 : String(err);

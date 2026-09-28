@@ -18,7 +18,9 @@ function) so the two features always agree on the circle's shape.
 
 Data comes from the public Overpass API (`amenity=parking`, nodes + ways +
 relations, selected with Overpass's own great-circle `around:radius,lat,lon`
-filter — never drive-time). For each mapped facility: a valid numeric
+filter — never drive-time), reached through this site's own Netlify function
+(`netlify/functions/overpass.js`) rather than called directly from the
+browser — see "Overpass proxy" below. For each mapped facility: a valid numeric
 `capacity` tag is used directly; otherwise, for a polygon, the area that
 falls **inside the selected circle** is computed (via a Sutherland–Hodgman
 clip against the same circle ring) and divided by 30 m²/space; a point with no
@@ -32,6 +34,22 @@ computed features on the map; clicking one opens a popup with its reported or
 estimated capacity. All of this is independently unit-tested (clipping/area
 math and capacity-tag validation) and was verified end-to-end against live
 Overpass responses for central Baghdad.
+
+### Overpass proxy
+
+Browsers calling `overpass-api.de` directly get rejected on some deployed
+origins — Overpass's edge sometimes answers a cross-origin POST with
+`406 Not Acceptable` and no CORS header, which shows up in devtools as a
+"blocked by CORS policy" error even though the real cause is server-side, not
+this app's code. `js/parking.js` therefore only ever calls this site's own
+same-origin `netlify/functions/overpass.js`, which makes the actual Overpass
+request server-to-server (trying `overpass-api.de`, `lz4.overpass-api.de`,
+then the independently-operated `overpass.kumi.systems`, in order) and
+returns the same `elements` JSON the frontend always expected. If every
+mirror fails, the function returns a clean `502` with
+`{ error, details }` instead of an HTML error page, and the frontend shows
+"Unavailable" on OSM's own figures without touching the Google Maps row or
+population calculation.
 
 ## How it differs from the main app's feature
 
@@ -76,7 +94,18 @@ other web map — the same as the original React app.
 
 ## Deploying
 
-See the delivery notes in the assistant's reply for the exact Netlify build
-command (`None`) and publish directory (this folder). There is no
-`netlify.toml` — a plain static folder needs no configuration for a Netlify
-drag-and-drop deploy.
+`netlify.toml` sets `publish = "."` and `functions = "netlify/functions"` —
+needed so Netlify picks up the Overpass proxy function above. Everything
+else about the deploy is unchanged: no build command, this whole folder is
+the publish directory.
+
+### Local development
+
+Plain static file servers (`npx serve`, `file://`) can't run
+`netlify/functions/overpass.js`, so the parking feature has nothing to call
+locally under those. Use the Netlify CLI instead, which serves the static
+files and the function together on one port:
+
+```
+npx netlify-cli dev
+```

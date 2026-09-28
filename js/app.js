@@ -372,18 +372,32 @@ function renderParkingPanel({ loading, error, summary }) {
   parkingPanelEmpty.hidden = true;
   parkingPanelResult.hidden = false;
 
-  parkingPanelLoading.hidden = !loading || !!summary;
+  parkingPanelLoading.hidden = !loading || !!summary || !!error;
   parkingPanelError.hidden = !error;
-  parkingStats.hidden = !!error || !summary;
-
-  if (error) {
-    parkingPanelErrorMessage.textContent = error;
-    return;
-  }
-  if (!summary) return;
+  // OSM failing does not take down the rest of the panel — Google Maps'
+  // row and the Retry button both still need to render, so the stats list
+  // stays visible and shows "Unavailable"/"Unknown" for OSM's own figures
+  // instead of disappearing behind a full-panel error state.
+  parkingStats.hidden = loading && !summary && !error;
 
   const MUTED = 'parking-stats__value--muted';
   const setMuted = (el, muted) => el.classList.toggle(MUTED, muted);
+
+  if (error) {
+    parkingPanelErrorMessage.textContent = error;
+    parkingStatFacilities.textContent = 'Unavailable';
+    setMuted(parkingStatFacilities, true);
+    parkingStatSpaces.textContent = '—';
+    setMuted(parkingStatSpaces, true);
+    parkingStatKnown.textContent = '—';
+    setMuted(parkingStatKnown, true);
+    parkingStatEstimated.textContent = '—';
+    setMuted(parkingStatEstimated, true);
+    parkingStatSupply.textContent = 'Unknown';
+    setMuted(parkingStatSupply, true);
+    return;
+  }
+  if (!summary) return;
 
   // Raw counts of returned objects are always real, knowable numbers — 0
   // mapped facilities/spaces is itself a fact worth showing, never "unknown".
@@ -633,6 +647,7 @@ function recalculateParking() {
       });
     },
     onError: (message) => {
+      console.warn('OSM parking data unavailable:', message);
       renderParkingPanel({ loading: false, error: message, summary: null });
       rerender();
     },
