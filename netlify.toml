@@ -1,3 +1,19 @@
 [build]
   publish = "."
   functions = "netlify/functions"
+
+# `netlify dev`'s own built-in static server doesn't serve HTTP range
+# requests — it always answers with the full file, which breaks the
+# population raster's windowed reads (geotiff.js throws "Server responded
+# with full file"). Point it at dev-server.mjs instead, a small local-only
+# script that does support ranges (see that file for why it's a plain `node`
+# script rather than `npx serve` — Windows npx nested-spawn resolution).
+# Production Netlify hosting always supports range requests, so none of this
+# affects the deployed site.
+[dev]
+  command = "node dev-server.mjs"
+  targetPort = 3999
+  port = 8888
+  publish = "."
+  framework = "#custom"
+  autoLaunch = false
