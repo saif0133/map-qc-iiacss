@@ -16,13 +16,19 @@ window.ParkingFeature = (function () {
   'use strict';
 
   // The free public Overpass instance occasionally answers with 502/503/504
-  // or just stalls under load — these are its own official mirrors (same
-  // project, same data, different servers), tried in order so one slow or
-  // overloaded server doesn't fail the whole lookup.
+  // or just stalls under load. The first three hostnames below are all part
+  // of the SAME main.overpass-api.de cluster and share one rate-limit pool —
+  // they help with a single overloaded node, but not with the whole pool
+  // being rate-limited (when that happens all three fail together, which is
+  // exactly what a shared-pool 429/504 without CORS headers looks like in
+  // the browser). Kumi Systems runs a genuinely separate, independently
+  // operated Overpass instance with its own quota, so it's kept last as a
+  // real fallback rather than another face of the same server.
   const OVERPASS_ENDPOINTS = [
     'https://overpass-api.de/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
     'https://z.overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
   ];
   const OVERPASS_ATTEMPT_TIMEOUT_MS = 15_000;
   const OVERPASS_OVERALL_TIMEOUT_MS = 50_000;
@@ -665,9 +671,11 @@ window.ParkingFeature = (function () {
         const message =
           err instanceof Error && err.name === 'AbortError'
             ? 'The parking data request timed out after trying multiple servers. Try again in a moment.'
-            : err instanceof Error
-              ? err.message
-              : String(err);
+            : err instanceof TypeError
+              ? 'Could not reach the OpenStreetMap Overpass API on any mirror right now. This usually means the public service is heavily loaded or temporarily rate-limiting requests (browsers report this as a blocked cross-origin request even though the real cause is on the server side). Try again in a minute.'
+              : err instanceof Error
+                ? err.message
+                : String(err);
         callbacks.onError(message);
       });
   }
