@@ -12,9 +12,8 @@
 // own classification/dedup/capacity logic needs no changes at all.
 
 const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
 
 // Netlify's synchronous function limit is a hard 60s ceiling, so three
@@ -35,10 +34,23 @@ function log(...args) {
   if (isDev) console.log('[overpass proxy]', ...args);
 }
 
+function endpointLabel(endpoint) {
+  return new URL(endpoint).hostname;
+}
+
+function logAttempt(attemptNumber, endpoint, status, durationMs, fallbackTriggered) {
+  log(
+    `Overpass attempt ${attemptNumber}:\n` +
+      `endpoint: ${endpointLabel(endpoint)}\n` +
+      `status: ${status}\n` +
+      `duration: ${durationMs}ms\n` +
+      `fallback triggered: ${fallbackTriggered}`
+  );
+}
+
 async function queryEndpoint(endpoint, query) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ENDPOINT_TIMEOUT_MS);
-  const startedAt = Date.now();
   try {
     const body = new URLSearchParams();
     body.set('data', query);
@@ -52,7 +64,6 @@ async function queryEndpoint(endpoint, query) {
       body: body.toString(),
       signal: controller.signal,
     });
-    log(`${endpoint} -> ${response.status} in ${Date.now() - startedAt}ms`);
 
     if (!response.ok) {
       const err = new Error(`Overpass endpoint returned HTTP ${response.status}`);
@@ -103,9 +114,14 @@ exports.handler = async (event) => {
   log(`request received, query length=${query.length}`);
 
   const attempts = [];
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+  for (let i = 0; i < OVERPASS_ENDPOINTS.length; i++) {
+    const endpoint = OVERPASS_ENDPOINTS[i];
+    const attemptNumber = i + 1;
+    const fallbackTriggered = i > 0;
+    const startedAt = Date.now();
     try {
       const json = await queryEndpoint(endpoint, query);
+      logAttempt(attemptNumber, endpoint, 200, Date.now() - startedAt, fallbackTriggered);
       return {
         statusCode: 200,
         headers: {
@@ -115,10 +131,9 @@ exports.handler = async (event) => {
         body: JSON.stringify(json),
       };
     } catch (err) {
-      const reason =
-        err.name === 'AbortError' ? 'timeout' : err.status ? `HTTP ${err.status}` : err.message;
-      log(`${endpoint} failed: ${reason}`);
-      attempts.push({ endpoint, reason });
+      const status = err.name === 'AbortError' ? 'timeout' : err.status || err.message;
+      logAttempt(attemptNumber, endpoint, status, Date.now() - startedAt, fallbackTriggered);
+      attempts.push({ endpoint: endpointLabel(endpoint), reason: String(status) });
     }
   }
 
@@ -128,6 +143,6 @@ exports.handler = async (event) => {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     },
-    body: JSON.stringify({ error: 'Overpass service unavailable', details: attempts }),
+    body: JSON.stringify({ error: 'OSM parking service temporarily unavailable', details: attempts }),
   };
 };
