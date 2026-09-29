@@ -17,7 +17,7 @@
 
 const POSTPASS_ENDPOINT = 'https://postpass.geofabrik.de/api/interpreter';
 const REQUEST_TIMEOUT_MS = 20_000;
-const MAX_RADIUS_METERS = 10_000;
+const MAX_RADIUS_METERS = 60_000;
 const USER_AGENT = 'IIACSS-QC-Map/1.0 (+https://iraq-map-data.netlify.app)';
 
 const isDev = process.env.CONTEXT !== 'production';

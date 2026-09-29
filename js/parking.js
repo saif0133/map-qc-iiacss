@@ -53,8 +53,12 @@ window.ParkingFeature = (function () {
    * winding is normalised to counter-clockwise first, since OSM way node
    * order (and the clip ring) are not guaranteed to wind consistently.
    * Working directly in lon/lat degrees for the clip's line intersections and
-   * for point-in-polygon is a safe local approximation at the <=10 km scale
-   * these radii cover; the resulting ring is then projected to metres
+   * for point-in-polygon is safe regardless of the selected radius (up to
+   * 60 km): the circle ring's own vertices are already true geodesic points
+   * (from app.js's destinationPoint()), and the accuracy of the final
+   * projected-area math below depends on the size of the individual facility
+   * polygon being measured (tens to hundreds of metres), not on how far it
+   * is from the search center. The resulting ring is then projected to metres
    * (anchored at its own first vertex) before measuring area, which is where
    * accuracy actually matters.
    * ------------------------------------------------------------------ */
